@@ -1042,9 +1042,9 @@ select.form-input {
     padding: 12px 14px;
   }
 
-  /* --- Input panel: tighter on phone --- */
+  /* --- Input panel: tighter on phone, floated above safe area --- */
   .input-panel {
-    padding: 0 0.5rem 1rem 0.5rem;
+    padding: 0 0.75rem calc(1.5rem + env(safe-area-inset-bottom, 12px)) 0.75rem;
   }
 
   .input-width-limiter {

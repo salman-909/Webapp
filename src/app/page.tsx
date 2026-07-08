@@ -890,9 +890,7 @@ export default function Home() {
               </svg>
               <span>{isTemporaryActive ? "Temporary" : "Temporary"}</span>
             </button>
-            <button className="btn-icon" onClick={() => setIsSettingsOpen(true)} title="Quick config">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-            </button>
+            {/* Settings gear removed from header as requested (available in sidebar footer) */}
           </div>
         </header>
 
@@ -1082,22 +1080,50 @@ export default function Home() {
 
               <div className="form-group">
                 <label>Preset Model</label>
-                <select 
-                  className="form-input" 
-                  value={selectedModel} 
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  id="model-preset-select"
-                >
-                  <optgroup label="Claude Presets (Method 1: Anthropic Messages)">
-                    <option value="claude-opus-4-6">claude-opus-4-6 (Default)</option>
-                    <option value="claude-opus-4-8">claude-opus-4-8</option>
-                    <option value="claude-opus-4-7">claude-opus-4-7</option>
-                  </optgroup>
-                  <optgroup label="OpenAI Presets (Method 2: completions)">
-                    <option value="gpt-5.5">gpt-5.5</option>
-                    <option value="glm-5.2">glm-5.2</option>
-                  </optgroup>
-                </select>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "4px" }}>
+                  {MODEL_DETAILS.map(m => {
+                    const isSelected = selectedModel === m.id;
+                    const isClaude = m.id.startsWith("claude");
+                    return (
+                      <div
+                        key={m.id}
+                        onClick={() => handleModelChange(m.id)}
+                        style={{
+                          padding: "10px 14px",
+                          borderRadius: "10px",
+                          border: isSelected ? "2.5px solid var(--accent-color)" : "1px solid var(--border-color)",
+                          background: isSelected ? "rgba(16, 163, 127, 0.06)" : "transparent",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          transition: "all 0.15s ease"
+                        }}
+                      >
+                        <div style={{ flexGrow: 1, textAlign: "left" }}>
+                          <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <span>{m.name}</span>
+                            <span style={{ 
+                              fontSize: "0.68rem", 
+                              fontWeight: 500, 
+                              color: "var(--text-secondary)", 
+                              padding: "2px 6px", 
+                              borderRadius: "4px", 
+                              backgroundColor: isClaude ? "rgba(209, 115, 23, 0.12)" : "rgba(16, 163, 127, 0.12)",
+                              border: isClaude ? "1px solid rgba(209, 115, 23, 0.2)" : "1px solid rgba(16, 163, 127, 0.2)"
+                            }}>
+                              {isClaude ? "Claude" : "OpenAI"}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", marginTop: "2px" }}>{m.desc}</div>
+                        </div>
+                        {isSelected && (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" strokeWidth="3.5" style={{ flexShrink: 0, marginLeft: "8px" }}><polyline points="20 6 9 17 4 12"></polyline></svg>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="form-group">
