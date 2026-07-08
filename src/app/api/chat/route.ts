@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 // Whitelisted Claude Code headers
 const CLAUDE_CLI_HEADERS = {
