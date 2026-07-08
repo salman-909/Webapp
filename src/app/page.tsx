@@ -506,8 +506,16 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || "Failed to fetch completions stream.");
+        let errMsg = "Failed to fetch completions stream.";
+        try {
+          const errData = await response.json();
+          errMsg = errData.error || errMsg;
+        } catch (_) {
+          try {
+            errMsg = await response.text();
+          } catch (__) {}
+        }
+        throw new Error(errMsg);
       }
 
       const reader = response.body?.getReader();
@@ -515,13 +523,15 @@ export default function Home() {
       if (!reader) throw new Error("Stream response body is not readable.");
 
       let assistantResponse = "";
+      let buffer = "";
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
           const trimmed = line.trim();

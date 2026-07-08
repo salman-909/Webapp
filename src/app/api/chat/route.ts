@@ -1,29 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Run on standard Serverless Node.js runtime for full outbound compatibility and reliable web streaming
-export const runtime = 'nodejs';
-// Force dynamic rendering to prevent Next.js from caching event streams
-export const dynamic = 'force-dynamic';
+export const runtime = 'edge';
 
-// Mimic VS Code Cline headers to bypass datacenter blocking policies on AI proxy gateways
+// Whitelisted Claude Code headers
 const CLAUDE_CLI_HEADERS = {
-  'User-Agent': 'cline',
-  'HTTP-Referer': 'https://github.com/cline/cline',
-  'Referer': 'https://github.com/cline/cline',
-  'X-Title': 'Cline',
+  'User-Agent': 'claude-cli/2.1.119 (external, cli)',
+  'x-stainless-arch': 'x64',
+  'x-stainless-lang': 'js',
+  'x-stainless-os': 'win32',
+  'x-stainless-runtime': 'node',
+  'x-stainless-runtime-version': '24.12.0',
 };
 
 // Translate Anthropic SSE events into standard OpenAI choices/delta SSE events
 async function* translateAnthropicStream(responseBody: ReadableStream<Uint8Array>) {
-  if (!responseBody) return;
-  let reader;
-  
-  try {
-    reader = responseBody.getReader();
-    const decoder = new TextDecoder();
-    const encoder = new TextEncoder();
-    let buffer = '';
+  const reader = responseBody.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = '';
 
+  try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -60,11 +56,7 @@ async function* translateAnthropicStream(responseBody: ReadableStream<Uint8Array
   } catch (err) {
     console.error('Error translating stream:', err);
   } finally {
-    if (reader) {
-      try {
-        reader.releaseLock();
-      } catch (e) {}
-    }
+    reader.releaseLock();
   }
 }
 
@@ -75,14 +67,7 @@ export async function POST(req: NextRequest) {
 
     // Fallback to environment variables
     const finalApiKey = apiKey || process.env.AGENTROUTER_API_KEY;
-    
-    // Normalize Base URL: remove trailing slashes
-    let finalBaseUrl = (baseUrl || process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.org').trim().replace(/\/+$/, '');
-    
-    // If the base URL ends with /v1, strip it so we can append endpoints consistently
-    if (finalBaseUrl.endsWith('/v1')) {
-      finalBaseUrl = finalBaseUrl.slice(0, -3);
-    }
+    const finalBaseUrl = (baseUrl || process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.org').trim().replace(/\/+$/, '');
 
     if (!finalApiKey) {
       return NextResponse.json({ error: 'API key is required.' }, { status: 400 });
@@ -135,22 +120,13 @@ export async function POST(req: NextRequest) {
       }
 
       if (stream) {
-        if (!response.body) {
-          return NextResponse.json({ error: 'Response body from AgentRouter is empty.' }, { status: 500 });
-        }
-
         // Stream translation: convert Anthropic format to OpenAI compatible format
         const transformedStream = new ReadableStream({
           async start(controller) {
-            try {
-              for await (const chunk of translateAnthropicStream(response.body!)) {
-                controller.enqueue(chunk);
-              }
-            } catch (err) {
-              console.error('Error in transformedStream start:', err);
-            } finally {
-              controller.close();
+            for await (const chunk of translateAnthropicStream(response.body!)) {
+              controller.enqueue(chunk);
             }
+            controller.close();
           },
         });
 
@@ -158,7 +134,7 @@ export async function POST(req: NextRequest) {
           headers: {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache, no-transform',
-            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
           },
         });
       } else {
@@ -173,7 +149,12 @@ export async function POST(req: NextRequest) {
       }
     } else {
       // Configuration Method 2: OpenAI Compatible route
-      const targetUrl = `${finalBaseUrl}/v1/chat/completions`;
+      // Ensure target URL ends with /v1 or appropriate path
+      let targetUrl = finalBaseUrl;
+      if (!targetUrl.includes('/v1')) {
+        targetUrl = `${targetUrl}/v1`;
+      }
+      targetUrl = `${targetUrl}/chat/completions`;
 
       const headers = {
         'content-type': 'application/json',
@@ -200,14 +181,11 @@ export async function POST(req: NextRequest) {
       }
 
       if (stream) {
-        if (!response.body) {
-          return NextResponse.json({ error: 'Response body from AgentRouter is empty.' }, { status: 500 });
-        }
         return new NextResponse(response.body, {
           headers: {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache, no-transform',
-            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
           },
         });
       } else {
