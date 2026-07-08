@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Whitelisted Claude Code headers
+// Run on Vercel's Edge Runtime (Cloudflare network) instead of Node.js serverless.
+// This bypasses the Alibaba WAF that blocks Vercel's datacenter IPs,
+// and supports proper streaming without the Node.js pipe issue.
+export const runtime = 'edge';
+
 const CLAUDE_CLI_HEADERS = {
   'User-Agent': 'claude-cli/2.1.119 (external, cli)',
   'x-stainless-arch': 'x64',
@@ -15,46 +19,34 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { apiKey, baseUrl, model, messages } = body;
 
-    // API key check
     const finalApiKey = apiKey || process.env.AGENTROUTER_API_KEY;
     if (!finalApiKey) {
       return NextResponse.json({ error: 'API key is required.' }, { status: 400 });
     }
 
-    // Normalize Base URL
     let cleanBaseUrl = (baseUrl || process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.org').trim();
-    if (!cleanBaseUrl.startsWith('http://') && !cleanBaseUrl.startsWith('https://')) {
-      cleanBaseUrl = 'https://' + cleanBaseUrl;
-    }
+    if (!cleanBaseUrl.startsWith('http')) cleanBaseUrl = 'https://' + cleanBaseUrl;
     cleanBaseUrl = cleanBaseUrl.replace(/\/+$/, '');
+    const apiBase = cleanBaseUrl.endsWith('/v1') ? cleanBaseUrl : `${cleanBaseUrl}/v1`;
 
-    // Ensure exactly one /v1 suffix
-    let apiBase = cleanBaseUrl;
-    if (!apiBase.endsWith('/v1')) {
-      apiBase = `${apiBase}/v1`;
-    }
+    const isClaudeModel = (model as string).startsWith('claude-');
 
-    const isClaudeModel = model.startsWith('claude-');
+    let upstreamResponse: Response;
 
     if (isClaudeModel) {
-      const targetUrl = `${apiBase}/messages`;
+      const systemMessages = (messages as any[]).filter(m => m.role === 'system');
+      const systemPrompt = systemMessages.map(m => m.content).join('\n\n');
+      const chatMessages = (messages as any[])
+        .filter(m => m.role !== 'system' && m.content?.trim())
+        .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }));
 
-      const systemMessages = messages.filter((m: any) => m.role === 'system');
-      const systemPrompt = systemMessages.map((m: any) => m.content).join('\n\n');
-      const chatMessages = messages
-        .filter((m: any) => m.role !== 'system')
-        .filter((m: any) => m.content && m.content.trim() !== '')
-        .map((m: any) => ({
-          role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: m.content,
-        }));
-
-      const response = await fetch(targetUrl, {
+      upstreamResponse = await fetch(`${apiBase}/messages`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           'x-api-key': finalApiKey,
           'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code',
           ...CLAUDE_CLI_HEADERS,
         },
         body: JSON.stringify({
@@ -62,62 +54,39 @@ export async function POST(req: NextRequest) {
           messages: chatMessages,
           ...(systemPrompt ? { system: systemPrompt } : {}),
           max_tokens: 4000,
-          stream: false,
+          stream: true,
         }),
       });
-
-      const responseText = await response.text();
-
-      if (!response.ok) {
-        return NextResponse.json(
-          { error: `API Error ${response.status}: ${responseText}` },
-          { status: response.status }
-        );
-      }
-
-      let data: any;
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        return NextResponse.json({ error: `Unexpected response: ${responseText}` }, { status: 502 });
-      }
-
-      const text = data.content?.find((b: any) => b.type === 'text')?.text || '';
-      return NextResponse.json({
-        choices: [{ message: { role: 'assistant', content: text }, finish_reason: 'stop' }]
-      });
-
     } else {
-      const targetUrl = `${apiBase}/chat/completions`;
-
-      const response = await fetch(targetUrl, {
+      const chatMessages = (messages as any[]).filter(m => m.content?.trim());
+      upstreamResponse = await fetch(`${apiBase}/chat/completions`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           'Authorization': `Bearer ${finalApiKey}`,
           ...CLAUDE_CLI_HEADERS,
         },
-        body: JSON.stringify({ model, messages, stream: false }),
+        body: JSON.stringify({ model, messages: chatMessages, stream: true }),
       });
-
-      const responseText = await response.text();
-
-      if (!response.ok) {
-        return NextResponse.json(
-          { error: `API Error ${response.status}: ${responseText}` },
-          { status: response.status }
-        );
-      }
-
-      let data: any;
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        return NextResponse.json({ error: `Unexpected response: ${responseText}` }, { status: 502 });
-      }
-
-      return NextResponse.json(data);
     }
+
+    if (!upstreamResponse.ok) {
+      const errText = await upstreamResponse.text();
+      return NextResponse.json(
+        { error: `API Error ${upstreamResponse.status}: ${errText}` },
+        { status: upstreamResponse.status }
+      );
+    }
+
+    // Edge Runtime properly streams response.body back to client
+    return new NextResponse(upstreamResponse.body, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'X-Accel-Buffering': 'no',
+      },
+    });
 
   } catch (error: any) {
     return NextResponse.json(

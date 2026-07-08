@@ -495,60 +495,23 @@ export default function Home() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    // ─── Direct browser call to agentrouter.org ───────────────────────────
-    // We call the API from the browser (not through Vercel) because
-    // agentrouter.org's Alibaba WAF blocks Vercel's datacenter IPs.
-    // The browser uses the user's home IP, which is not blocked.
-    // ──────────────────────────────────────────────────────────────────────
-    const finalModel = customModel || selectedModel;
-    const isClaudeModel = finalModel.startsWith("claude-");
-
-    let cleanBaseUrl = (baseUrl || "https://agentrouter.org").trim().replace(/\/+$/, "");
-    if (!cleanBaseUrl.startsWith("http")) cleanBaseUrl = "https://" + cleanBaseUrl;
-    const apiBase = cleanBaseUrl.endsWith("/v1") ? cleanBaseUrl : `${cleanBaseUrl}/v1`;
-
     try {
-      let response: Response;
-
-      if (isClaudeModel) {
-        const systemMessages = updatedMessages.filter((m: any) => m.role === "system");
-        const systemPrompt = systemMessages.map((m: any) => m.content).join("\n\n");
-        const chatMessages = updatedMessages
-          .filter((m: any) => m.role !== "system" && m.content?.trim())
-          .map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
-
-        response = await fetch(`${apiBase}/messages`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-          },
-          body: JSON.stringify({
-            model: finalModel,
-            messages: chatMessages,
-            ...(systemPrompt ? { system: systemPrompt } : {}),
-            max_tokens: 4000,
-            stream: true,
-          }),
-          signal: controller.signal,
-        });
-      } else {
-        const chatMessages = updatedMessages.filter((m: any) => m.content?.trim());
-        response = await fetch(`${apiBase}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "Authorization": `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({ model: finalModel, messages: chatMessages, stream: true }),
-          signal: controller.signal,
-        });
-      }
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey,
+          baseUrl,
+          model: customModel || selectedModel,
+          messages: updatedMessages,
+        }),
+        signal: controller.signal,
+      });
 
       if (!response.ok) {
-        const errText = await response.text().catch(() => `HTTP ${response.status}`);
-        throw new Error(`API Error ${response.status}: ${errText.slice(0, 200)}`);
+        let errMsg = `Error ${response.status}`;
+        try { const d = await response.json(); errMsg = d.error || errMsg; } catch (_) {}
+        throw new Error(errMsg);
       }
 
       const reader = response.body?.getReader();
@@ -610,8 +573,7 @@ export default function Home() {
           if (c.id === chatId) {
             const msgs = [...c.messages];
             const lastMsg = { ...msgs[msgs.length - 1] };
-            lastMsg.content = lastMsg.content || errorMsg;
-            if (!lastMsg.content) lastMsg.content = errorMsg;
+            lastMsg.content = errorMsg;
             msgs[msgs.length - 1] = lastMsg;
             return { ...c, messages: msgs };
           }
