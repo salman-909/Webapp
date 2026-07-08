@@ -495,47 +495,111 @@ export default function Home() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          apiKey,
-          baseUrl,
-          model: customModel || selectedModel,
-          messages: updatedMessages,
-        }),
-        signal: controller.signal
-      });
+    // ─── Direct browser call to agentrouter.org ───────────────────────────
+    // We call the API from the browser (not through Vercel) because
+    // agentrouter.org's Alibaba WAF blocks Vercel's datacenter IPs.
+    // The browser uses the user's home IP, which is not blocked.
+    // ──────────────────────────────────────────────────────────────────────
+    const finalModel = customModel || selectedModel;
+    const isClaudeModel = finalModel.startsWith("claude-");
 
-      let errMsg = "";
-      if (!response.ok) {
-        try {
-          const errData = await response.json();
-          errMsg = errData.error || `Error ${response.status}`;
-        } catch (_) {
-          errMsg = await response.text().catch(() => `Error ${response.status}`);
-        }
-        throw new Error(errMsg);
+    let cleanBaseUrl = (baseUrl || "https://agentrouter.org").trim().replace(/\/+$/, "");
+    if (!cleanBaseUrl.startsWith("http")) cleanBaseUrl = "https://" + cleanBaseUrl;
+    const apiBase = cleanBaseUrl.endsWith("/v1") ? cleanBaseUrl : `${cleanBaseUrl}/v1`;
+
+    try {
+      let response: Response;
+
+      if (isClaudeModel) {
+        const systemMessages = updatedMessages.filter((m: any) => m.role === "system");
+        const systemPrompt = systemMessages.map((m: any) => m.content).join("\n\n");
+        const chatMessages = updatedMessages
+          .filter((m: any) => m.role !== "system" && m.content?.trim())
+          .map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
+
+        response = await fetch(`${apiBase}/messages`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: finalModel,
+            messages: chatMessages,
+            ...(systemPrompt ? { system: systemPrompt } : {}),
+            max_tokens: 4000,
+            stream: true,
+          }),
+          signal: controller.signal,
+        });
+      } else {
+        const chatMessages = updatedMessages.filter((m: any) => m.content?.trim());
+        response = await fetch(`${apiBase}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "Authorization": `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({ model: finalModel, messages: chatMessages, stream: true }),
+          signal: controller.signal,
+        });
       }
 
-      const data = await response.json();
-      const assistantContent =
-        data.choices?.[0]?.message?.content ||
-        data.content?.[0]?.text ||
-        data.error ||
-        "";
+      if (!response.ok) {
+        const errText = await response.text().catch(() => `HTTP ${response.status}`);
+        throw new Error(`API Error ${response.status}: ${errText.slice(0, 200)}`);
+      }
 
-      setChats(prev => prev.map(c => {
-        if (c.id === chatId) {
-          const msgs = [...c.messages];
-          const lastMsg = { ...msgs[msgs.length - 1] };
-          lastMsg.content = assistantContent;
-          msgs[msgs.length - 1] = lastMsg;
-          return { ...c, messages: msgs };
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      if (!reader) throw new Error("No response body.");
+
+      let assistantResponse = "";
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed === "data: [DONE]") continue;
+          if (!trimmed.startsWith("data:")) continue;
+
+          try {
+            const raw = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
+            const data = JSON.parse(raw);
+
+            // OpenAI format
+            let token = data.choices?.[0]?.delta?.content || "";
+            // Anthropic format
+            if (!token && data.type === "content_block_delta" && data.delta?.type === "text_delta") {
+              token = data.delta.text || "";
+            }
+
+            if (token) {
+              assistantResponse += token;
+              setChats(prev => prev.map(c => {
+                if (c.id === chatId) {
+                  const msgs = [...c.messages];
+                  const lastMsg = { ...msgs[msgs.length - 1] };
+                  lastMsg.content = assistantResponse;
+                  msgs[msgs.length - 1] = lastMsg;
+                  return { ...c, messages: msgs };
+                }
+                return c;
+              }));
+            }
+          } catch (_) {
+            // partial JSON — skip
+          }
         }
-        return c;
-      }));
+      }
 
     } catch (err: any) {
       if (err.name === "AbortError") {
@@ -546,7 +610,8 @@ export default function Home() {
           if (c.id === chatId) {
             const msgs = [...c.messages];
             const lastMsg = { ...msgs[msgs.length - 1] };
-            lastMsg.content = errorMsg;
+            lastMsg.content = lastMsg.content || errorMsg;
+            if (!lastMsg.content) lastMsg.content = errorMsg;
             msgs[msgs.length - 1] = lastMsg;
             return { ...c, messages: msgs };
           }
