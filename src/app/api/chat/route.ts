@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Run on Vercel's Edge Runtime (Cloudflare network) instead of Node.js serverless.
-// This bypasses the Alibaba WAF that blocks Vercel's datacenter IPs,
-// and supports proper streaming without the Node.js pipe issue.
+// Edge Runtime uses Vercel's edge network (not datacenter Node.js IPs)
+// which bypasses the Alibaba WAF that was blocking serverless function IPs.
 export const runtime = 'edge';
 
 const CLAUDE_CLI_HEADERS = {
@@ -54,7 +53,7 @@ export async function POST(req: NextRequest) {
           messages: chatMessages,
           ...(systemPrompt ? { system: systemPrompt } : {}),
           max_tokens: 4000,
-          stream: true,
+          stream: false,
         }),
       });
     } else {
@@ -66,27 +65,45 @@ export async function POST(req: NextRequest) {
           'Authorization': `Bearer ${finalApiKey}`,
           ...CLAUDE_CLI_HEADERS,
         },
-        body: JSON.stringify({ model, messages: chatMessages, stream: true }),
+        body: JSON.stringify({ model, messages: chatMessages, stream: false }),
       });
     }
 
-    if (!upstreamResponse.ok) {
-      const errText = await upstreamResponse.text();
+    const responseText = await upstreamResponse.text();
+
+    // Detect WAF HTML response (contains Alibaba WAF markers)
+    if (responseText.includes('aliyun_waf') || responseText.includes('aliyunCaptcha') || responseText.startsWith('<!doctype')) {
       return NextResponse.json(
-        { error: `API Error ${upstreamResponse.status}: ${errText}` },
+        { error: 'Request blocked by upstream WAF. Please check agentrouter.org status or contact support.' },
+        { status: 503 }
+      );
+    }
+
+    if (!upstreamResponse.ok) {
+      return NextResponse.json(
+        { error: `API Error ${upstreamResponse.status}: ${responseText}` },
         { status: upstreamResponse.status }
       );
     }
 
-    // Edge Runtime properly streams response.body back to client
-    return new NextResponse(upstreamResponse.body, {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'X-Accel-Buffering': 'no',
-      },
-    });
+    let data: any;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      return NextResponse.json(
+        { error: `Unexpected response from API: ${responseText.slice(0, 300)}` },
+        { status: 502 }
+      );
+    }
+
+    if (isClaudeModel) {
+      const text = data.content?.find((b: any) => b.type === 'text')?.text || '';
+      return NextResponse.json({
+        choices: [{ message: { role: 'assistant', content: text }, finish_reason: 'stop' }]
+      });
+    }
+
+    return NextResponse.json(data);
 
   } catch (error: any) {
     return NextResponse.json(

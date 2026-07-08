@@ -508,61 +508,27 @@ export default function Home() {
         signal: controller.signal,
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        let errMsg = `Error ${response.status}`;
-        try { const d = await response.json(); errMsg = d.error || errMsg; } catch (_) {}
-        throw new Error(errMsg);
+        throw new Error(data.error || `Error ${response.status}`);
       }
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      if (!reader) throw new Error("No response body.");
+      const assistantContent =
+        data.choices?.[0]?.message?.content ||
+        data.content?.[0]?.text ||
+        "";
 
-      let assistantResponse = "";
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed === "data: [DONE]") continue;
-          if (!trimmed.startsWith("data:")) continue;
-
-          try {
-            const raw = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
-            const data = JSON.parse(raw);
-
-            // OpenAI format
-            let token = data.choices?.[0]?.delta?.content || "";
-            // Anthropic format
-            if (!token && data.type === "content_block_delta" && data.delta?.type === "text_delta") {
-              token = data.delta.text || "";
-            }
-
-            if (token) {
-              assistantResponse += token;
-              setChats(prev => prev.map(c => {
-                if (c.id === chatId) {
-                  const msgs = [...c.messages];
-                  const lastMsg = { ...msgs[msgs.length - 1] };
-                  lastMsg.content = assistantResponse;
-                  msgs[msgs.length - 1] = lastMsg;
-                  return { ...c, messages: msgs };
-                }
-                return c;
-              }));
-            }
-          } catch (_) {
-            // partial JSON — skip
-          }
+      setChats(prev => prev.map(c => {
+        if (c.id === chatId) {
+          const msgs = [...c.messages];
+          const lastMsg = { ...msgs[msgs.length - 1] };
+          lastMsg.content = assistantContent || "[No response received]";
+          msgs[msgs.length - 1] = lastMsg;
+          return { ...c, messages: msgs };
         }
-      }
+        return c;
+      }));
 
     } catch (err: any) {
       if (err.name === "AbortError") {
