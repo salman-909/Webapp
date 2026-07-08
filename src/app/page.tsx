@@ -492,7 +492,6 @@ export default function Home() {
     setAttachedFiles([]); 
     setAttachedLocalFiles([]);
 
-    // Setup streaming reader
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
@@ -505,84 +504,49 @@ export default function Home() {
           baseUrl,
           model: customModel || selectedModel,
           messages: updatedMessages,
-          stream: true
         }),
         signal: controller.signal
       });
 
+      let errMsg = "";
       if (!response.ok) {
-        let errMsg = "Failed to fetch completions stream.";
         try {
           const errData = await response.json();
-          errMsg = errData.error || errMsg;
+          errMsg = errData.error || `Error ${response.status}`;
         } catch (_) {
-          try {
-            errMsg = await response.text();
-          } catch (__) {}
+          errMsg = await response.text().catch(() => `Error ${response.status}`);
         }
         throw new Error(errMsg);
       }
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      if (!reader) throw new Error("Stream response body is not readable.");
+      const data = await response.json();
+      const assistantContent =
+        data.choices?.[0]?.message?.content ||
+        data.content?.[0]?.text ||
+        data.error ||
+        "";
 
-      let assistantResponse = "";
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          if (trimmed === "data: [DONE]") continue;
-
-          if (trimmed.startsWith("data:")) {
-            try {
-              const rawData = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
-              const data = JSON.parse(rawData);
-              let token = data.choices?.[0]?.delta?.content || "";
-              
-              // Handle Anthropic / Claude stream format
-              if (data.type === "content_block_delta" && data.delta?.text) {
-                token = data.delta.text;
-              }
-              
-              assistantResponse += token;
-
-              // Stream response into UI
-              setChats(prev => prev.map(c => {
-                if (c.id === chatId) {
-                  const msgs = [...c.messages];
-                  const lastMsg = { ...msgs[msgs.length - 1] };
-                  lastMsg.content = assistantResponse;
-                  msgs[msgs.length - 1] = lastMsg;
-                  return { ...c, messages: msgs };
-                }
-                return c;
-              }));
-            } catch (e) {
-              // Ignore partial JSON parse errors
-            }
-          }
+      setChats(prev => prev.map(c => {
+        if (c.id === chatId) {
+          const msgs = [...c.messages];
+          const lastMsg = { ...msgs[msgs.length - 1] };
+          lastMsg.content = assistantContent;
+          msgs[msgs.length - 1] = lastMsg;
+          return { ...c, messages: msgs };
         }
-      }
+        return c;
+      }));
+
     } catch (err: any) {
       if (err.name === "AbortError") {
-        console.log("Stream generation aborted.");
+        console.log("Request aborted.");
       } else {
-        const errorMsg = `\n\n[Error: ${err.message || err}]`;
+        const errorMsg = `[Error: ${err.message || err}]`;
         setChats(prev => prev.map(c => {
           if (c.id === chatId) {
             const msgs = [...c.messages];
             const lastMsg = { ...msgs[msgs.length - 1] };
-            lastMsg.content = lastMsg.content ? lastMsg.content + errorMsg : errorMsg;
+            lastMsg.content = errorMsg;
             msgs[msgs.length - 1] = lastMsg;
             return { ...c, messages: msgs };
           }
