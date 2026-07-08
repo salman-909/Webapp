@@ -19,19 +19,30 @@ export async function POST(req: NextRequest) {
 
     // Fallback to environment variables
     const finalApiKey = apiKey || process.env.AGENTROUTER_API_KEY;
-    const finalBaseUrl = (baseUrl || process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.org').trim().replace(/\/+$/, '');
 
     if (!finalApiKey) {
       return NextResponse.json({ error: 'API key is required.' }, { status: 400 });
     }
 
+    // Normalize Base URL: strip trailing slashes, ensure https://
+    let cleanBaseUrl = (baseUrl || process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.org').trim();
+    if (!cleanBaseUrl.startsWith('http://') && !cleanBaseUrl.startsWith('https://')) {
+      cleanBaseUrl = 'https://' + cleanBaseUrl;
+    }
+    cleanBaseUrl = cleanBaseUrl.replace(/\/+$/, '');
+
     // Determine if it is a Claude model
     const isClaudeModel = model.startsWith('claude-');
 
-    if (isClaudeModel) {
-      // Configuration Method 1: Anthropic Messages endpoint
-      const targetUrl = `${finalBaseUrl}/v1/messages`;
+    // Build the request URL correctly preventing duplicate /v1 paths
+    let targetUrl = cleanBaseUrl;
+    if (!targetUrl.endsWith('/v1')) {
+      targetUrl = `${targetUrl}/v1`;
+    }
 
+    if (isClaudeModel) {
+      targetUrl = `${targetUrl}/messages`;
+      
       // Format messages: extract system messages to root parameter
       const systemMessages = messages.filter((m: any) => m.role === 'system');
       const systemPrompt = systemMessages.map((m: any) => m.content).join('\n\n');
@@ -90,12 +101,6 @@ export async function POST(req: NextRequest) {
         });
       }
     } else {
-      // Configuration Method 2: OpenAI Compatible route
-      // Ensure target URL ends with /v1 or appropriate path
-      let targetUrl = finalBaseUrl;
-      if (!targetUrl.includes('/v1')) {
-        targetUrl = `${targetUrl}/v1`;
-      }
       targetUrl = `${targetUrl}/chat/completions`;
 
       const headers = {
