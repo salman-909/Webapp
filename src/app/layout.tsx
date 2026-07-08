@@ -13,7 +13,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AgentRouter Chat | Premium AI Workspace",
+  title: "ModelDeck | Premium AI Workspace",
   description: "A professional developer-oriented AI chat interface powered by AgentRouter.org, supporting multiple Claude and OpenAI-compatible models, local workspace context, and real-time streaming.",
   keywords: ["AI Chat", "AgentRouter", "Claude Opus", "OpenAI", "Vercel Chatbot", "Workspace Context"],
   authors: [{ name: "Antigravity Team" }],
