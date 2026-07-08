@@ -2,15 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 
 // Run on standard Serverless Node.js runtime for full outbound compatibility and reliable web streaming
 export const runtime = 'nodejs';
+// Force dynamic rendering to prevent Next.js from caching event streams
+export const dynamic = 'force-dynamic';
 
-// Whitelisted Claude Code headers
+// Mimic VS Code Cline headers to bypass datacenter blocking policies on AI proxy gateways
 const CLAUDE_CLI_HEADERS = {
-  'User-Agent': 'claude-cli/2.1.119 (external, cli)',
-  'x-stainless-arch': 'x64',
-  'x-stainless-lang': 'js',
-  'x-stainless-os': 'win32',
-  'x-stainless-runtime': 'node',
-  'x-stainless-runtime-version': '24.12.0',
+  'User-Agent': 'cline',
+  'HTTP-Referer': 'https://github.com/cline/cline',
+  'Referer': 'https://github.com/cline/cline',
+  'X-Title': 'Cline',
 };
 
 // Translate Anthropic SSE events into standard OpenAI choices/delta SSE events
@@ -75,7 +75,14 @@ export async function POST(req: NextRequest) {
 
     // Fallback to environment variables
     const finalApiKey = apiKey || process.env.AGENTROUTER_API_KEY;
-    const finalBaseUrl = (baseUrl || process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.org').trim().replace(/\/+$/, '');
+    
+    // Normalize Base URL: remove trailing slashes
+    let finalBaseUrl = (baseUrl || process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.org').trim().replace(/\/+$/, '');
+    
+    // If the base URL ends with /v1, strip it so we can append endpoints consistently
+    if (finalBaseUrl.endsWith('/v1')) {
+      finalBaseUrl = finalBaseUrl.slice(0, -3);
+    }
 
     if (!finalApiKey) {
       return NextResponse.json({ error: 'API key is required.' }, { status: 400 });
@@ -150,7 +157,7 @@ export async function POST(req: NextRequest) {
         return new NextResponse(transformedStream, {
           headers: {
             'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
+            'Cache-Control': 'no-cache, no-transform',
             'Connection': 'keep-alive',
           },
         });
@@ -166,12 +173,7 @@ export async function POST(req: NextRequest) {
       }
     } else {
       // Configuration Method 2: OpenAI Compatible route
-      // Ensure target URL ends with /v1 or appropriate path
-      let targetUrl = finalBaseUrl;
-      if (!targetUrl.includes('/v1')) {
-        targetUrl = `${targetUrl}/v1`;
-      }
-      targetUrl = `${targetUrl}/chat/completions`;
+      const targetUrl = `${finalBaseUrl}/v1/chat/completions`;
 
       const headers = {
         'content-type': 'application/json',
@@ -204,7 +206,7 @@ export async function POST(req: NextRequest) {
         return new NextResponse(response.body, {
           headers: {
             'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
+            'Cache-Control': 'no-cache, no-transform',
             'Connection': 'keep-alive',
           },
         });
