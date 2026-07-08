@@ -49,7 +49,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
 
   // Settings states
-  const [apiKey, setApiKey] = useState("sk-DFvlmoUlBGXrJzvWIbrQyDYjRpFYCjthctyXTMjDkhOulBej");
+  const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("https://agentrouter.org");
   const [selectedModel, setSelectedModel] = useState("claude-opus-4-6");
   const [customModel, setCustomModel] = useState("");
@@ -401,6 +401,15 @@ export default function Home() {
   const handleSubmitPrompt = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!input.trim() && attachedFiles.length === 0 && attachedLocalFiles.length === 0) return;
+    
+    // Open settings if no API key is specified
+    if (!apiKey.trim()) {
+      setIsSettingsOpen(true);
+      setConnectionStatus("error");
+      setConnectionError("Please enter your AgentRouter API Key to start chatting.");
+      return;
+    }
+
     if (isLoading) return;
 
     let chatId = activeChatId;
@@ -468,7 +477,9 @@ export default function Home() {
         : input 
     };
 
-    const updatedMessages = [...currentChat.messages, userMessage];
+    // Filter out empty assistant messages from history to prevent Anthropic API rejection
+    const cleanHistory = currentChat.messages.filter(m => !(m.role === "assistant" && !m.content.trim()));
+    const updatedMessages = [...cleanHistory, userMessage];
     
     // Update local chats list state with display message
     setChats(prev => prev.map(c => {
