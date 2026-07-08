@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
+// Run on standard Serverless Node.js runtime for full outbound compatibility and reliable web streaming
+export const runtime = 'nodejs';
 
 // Whitelisted Claude Code headers
 const CLAUDE_CLI_HEADERS = {
@@ -14,12 +15,15 @@ const CLAUDE_CLI_HEADERS = {
 
 // Translate Anthropic SSE events into standard OpenAI choices/delta SSE events
 async function* translateAnthropicStream(responseBody: ReadableStream<Uint8Array>) {
-  const reader = responseBody.getReader();
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = '';
-
+  if (!responseBody) return;
+  let reader;
+  
   try {
+    reader = responseBody.getReader();
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let buffer = '';
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -56,7 +60,11 @@ async function* translateAnthropicStream(responseBody: ReadableStream<Uint8Array
   } catch (err) {
     console.error('Error translating stream:', err);
   } finally {
-    reader.releaseLock();
+    if (reader) {
+      try {
+        reader.releaseLock();
+      } catch (e) {}
+    }
   }
 }
 
@@ -120,13 +128,22 @@ export async function POST(req: NextRequest) {
       }
 
       if (stream) {
+        if (!response.body) {
+          return NextResponse.json({ error: 'Response body from AgentRouter is empty.' }, { status: 500 });
+        }
+
         // Stream translation: convert Anthropic format to OpenAI compatible format
         const transformedStream = new ReadableStream({
           async start(controller) {
-            for await (const chunk of translateAnthropicStream(response.body!)) {
-              controller.enqueue(chunk);
+            try {
+              for await (const chunk of translateAnthropicStream(response.body!)) {
+                controller.enqueue(chunk);
+              }
+            } catch (err) {
+              console.error('Error in transformedStream start:', err);
+            } finally {
+              controller.close();
             }
-            controller.close();
           },
         });
 
@@ -181,6 +198,9 @@ export async function POST(req: NextRequest) {
       }
 
       if (stream) {
+        if (!response.body) {
+          return NextResponse.json({ error: 'Response body from AgentRouter is empty.' }, { status: 500 });
+        }
         return new NextResponse(response.body, {
           headers: {
             'Content-Type': 'text/event-stream',
