@@ -12,54 +12,6 @@ const CLAUDE_CLI_HEADERS = {
   'x-stainless-runtime-version': '24.12.0',
 };
 
-// Translate Anthropic SSE events into standard OpenAI choices/delta SSE events
-async function* translateAnthropicStream(responseBody: ReadableStream<Uint8Array>) {
-  const reader = responseBody.getReader();
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = '';
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        if (trimmed.startsWith('data:')) {
-          const dataStr = trimmed.slice(5).trim();
-          if (dataStr === '[DONE]') continue;
-
-          try {
-            const data = JSON.parse(dataStr);
-            if (data.type === 'content_block_delta' && data.delta?.text) {
-              const token = data.delta.text;
-              // Construct OpenAI SSE compatible line
-              const openAiLine = `data: ${JSON.stringify({
-                choices: [{ delta: { content: token } }]
-              })}\n\n`;
-              yield encoder.encode(openAiLine);
-            }
-          } catch (e) {
-            // Ignore parsing errors for partial lines
-          }
-        }
-      }
-    }
-    yield encoder.encode('data: [DONE]\n\n');
-  } catch (err) {
-    console.error('Error translating stream:', err);
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -120,17 +72,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (stream) {
-        // Stream translation: convert Anthropic format to OpenAI compatible format
-        const transformedStream = new ReadableStream({
-          async start(controller) {
-            for await (const chunk of translateAnthropicStream(response.body!)) {
-              controller.enqueue(chunk);
-            }
-            controller.close();
-          },
-        });
-
-        return new NextResponse(transformedStream, {
+        return new NextResponse(response.body, {
           headers: {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache, no-transform',

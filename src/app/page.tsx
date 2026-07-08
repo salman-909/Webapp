@@ -538,10 +538,17 @@ export default function Home() {
           if (!trimmed) continue;
           if (trimmed === "data: [DONE]") continue;
 
-          if (trimmed.startsWith("data: ")) {
+          if (trimmed.startsWith("data:")) {
             try {
-              const data = JSON.parse(trimmed.slice(6));
-              const token = data.choices?.[0]?.delta?.content || "";
+              const rawData = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
+              const data = JSON.parse(rawData);
+              let token = data.choices?.[0]?.delta?.content || "";
+              
+              // Handle Anthropic / Claude stream format
+              if (data.type === "content_block_delta" && data.delta?.text) {
+                token = data.delta.text;
+              }
+              
               assistantResponse += token;
 
               // Stream response into UI
